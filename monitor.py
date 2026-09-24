@@ -15,22 +15,18 @@ class TelegramMonitor:
         self.database = database
         self.notifier = notifier
 
-        # notification message ID -> channel ID
+        
         self.pending_notifications = {}
 
-        # Telegram user ID
         self.my_user_id = None
 
-        # Channels that existed when the program started
+        
         self.baseline_channel_ids = set()
 
-        # Pending invite titles already printed
-        # during this program run.
+        
         self.printed_pending_invites = set()
 
-    # ========================================
-    # INITIALIZE
-    # ========================================
+    
 
     async def initialize(self):
 
@@ -42,9 +38,7 @@ class TelegramMonitor:
             f"Telegram user ID: {self.my_user_id}"
         )
 
-    # ========================================
-    # INITIAL BASELINE
-    # ========================================
+    
 
     async def initialize_baseline(self):
 
@@ -62,8 +56,7 @@ class TelegramMonitor:
             channel_id = channel.id
             title = dialog.title
 
-            # Remember channels that existed
-            # before the program started.
+            
             self.baseline_channel_ids.add(
                 channel_id
             )
@@ -102,9 +95,7 @@ class TelegramMonitor:
 
         print("Initial baseline created.")
 
-        # ====================================
-        # SHOW EXISTING PENDING REQUESTS ONCE
-        # ====================================
+        
 
         pending_invites = (
             self.database.get_pending_invites()
@@ -128,17 +119,14 @@ class TelegramMonitor:
                     pending_title
                 )
 
-    # ========================================
-    # NORMAL NEW CHANNEL DETECTION
-    # ========================================
+    
 
     async def check_for_new_channels(
         self,
         dialogs=None
     ):
 
-        # Reuse dialogs if main.py provides them.
-        # Otherwise get them normally.
+        
         if dialogs is None:
 
             dialogs = await self.client.get_dialogs()
@@ -168,13 +156,11 @@ class TelegramMonitor:
                 None
             )
 
-            # Ignore channels that existed
-            # before the program started.
+            
             if channel_id in self.baseline_channel_ids:
                 continue
 
-            # Ignore channels belonging to
-            # the pending join-request flow.
+            
             if title in pending_titles:
                 continue
 
@@ -185,9 +171,7 @@ class TelegramMonitor:
             if existing_channel is not None:
                 continue
 
-            # ====================================
-            # NEW CHANNEL FOUND
-            # ====================================
+            
 
             now = datetime.now()
 
@@ -237,10 +221,6 @@ class TelegramMonitor:
             print(
                 f"Notification sent for: {title}"
             )
-
-    # ========================================
-    # PRIVATE INVITE DETECTION
-    # ========================================
 
     async def handle_pending_join_request(
         self,
@@ -300,9 +280,6 @@ class TelegramMonitor:
 
                 invite_hash = match.group(1)
 
-                # ====================================
-                # CHECK DATABASE FIRST
-                # ====================================
 
                 existing_pending = (
                     self.database.get_pending_invite(
@@ -310,8 +287,7 @@ class TelegramMonitor:
                     )
                 )
 
-                # Already stored.
-                # Do not call Telegram again.
+                
                 if existing_pending is not None:
                     return
 
@@ -333,9 +309,7 @@ class TelegramMonitor:
 
                 try:
 
-                    # IMPORTANT:
-                    # This is called ONLY ONCE for
-                    # a newly detected invite.
+                    
                     invite = await self.client(
                         CheckChatInviteRequest(
                             invite_hash
@@ -408,9 +382,7 @@ class TelegramMonitor:
 
                 return
 
-    # ========================================
-    # CHECK PENDING REQUESTS
-    # ========================================
+    
 
     async def check_pending_channels(
         self,
@@ -424,8 +396,6 @@ class TelegramMonitor:
         if not pending_invites:
             return
 
-        # Reuse dialogs if main.py provides them.
-        # Otherwise get them normally.
         if dialogs is None:
 
             dialogs = await self.client.get_dialogs()
@@ -467,8 +437,7 @@ class TelegramMonitor:
 
             if approved_channel is None:
 
-                # Still waiting for approval.
-                # Do not print anything.
+                
                 continue
 
             await self.handle_approved_channel(
@@ -476,9 +445,7 @@ class TelegramMonitor:
                 approved_channel["entity"]
             )
 
-    # ========================================
-    # HANDLE APPROVED REQUEST
-    # ========================================
+    
 
     async def handle_approved_channel(
         self,
@@ -583,9 +550,7 @@ class TelegramMonitor:
                 f"{channel_title}: {error}"
             )
 
-    # ========================================
-    # YES / NO REPLY
-    # ========================================
+    
 
     async def handle_reply(self, event):
 
@@ -620,9 +585,7 @@ class TelegramMonitor:
             .lower()
         )
 
-        # ====================================
-        # YES -> LEAVE
-        # ====================================
+        
 
         if answer == "yes":
 
@@ -666,9 +629,7 @@ class TelegramMonitor:
                     f"{error}"
                 )
 
-        # ====================================
-        # NO -> KEEP
-        # ====================================
+        
 
         elif answer == "no":
 

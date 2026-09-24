@@ -11,40 +11,24 @@ from monitor import TelegramMonitor
 
 async def main():
 
-    # ========================================
-    # LOAD CONFIGURATION
-    # ========================================
 
     config = load_config()
 
-    # ========================================
-    # CONNECT TO TELEGRAM
-    # ========================================
 
     telegram = TelegramService(config)
 
     await telegram.connect()
 
-    # ========================================
-    # INITIALIZE DATABASE
-    # ========================================
-
     database = Database()
 
     database.initialize()
 
-    # ========================================
-    # CREATE NOTIFIER
-    # ========================================
 
     notifier = TelegramNotifier(
         telegram.client,
         database,
     )
 
-    # ========================================
-    # CREATE MONITOR
-    # ========================================
 
     monitor = TelegramMonitor(
         telegram.client,
@@ -52,39 +36,27 @@ async def main():
         notifier,
     )
 
-    # ========================================
-    # INITIALIZE TELEGRAM USER
-    # ========================================
 
     await monitor.initialize()
 
-    # ========================================
-    # LISTEN FOR YES / NO REPLIES
-    # ========================================
-
+    
     telegram.client.add_event_handler(
         monitor.handle_reply,
         events.NewMessage,
     )
 
-    # ========================================
-    # LISTEN FOR PRIVATE INVITE LINKS
-    # ========================================
+    
 
     telegram.client.add_event_handler(
         monitor.handle_pending_join_request,
         events.Raw,
     )
 
-    # ========================================
-    # CREATE INITIAL BASELINE
-    # ========================================
+    
 
     await monitor.initialize_baseline()
 
-    # ========================================
-    # START MESSAGE
-    # ========================================
+    
 
     print(
         "\n========================================"
@@ -122,38 +94,27 @@ async def main():
         "Press Ctrl+C to stop."
     )
 
-    # ========================================
-    # MAIN MONITORING LOOP
-    # ========================================
+    
 
     try:
 
         while True:
 
-            # Get Telegram dialogs ONLY ONCE.
-            #
-            # The same result is passed to both
-            # pending-request checking and normal
-            # channel checking.
+            
             dialogs = await telegram.client.get_dialogs()
 
-            # ====================================
-            # CHECK PENDING JOIN REQUESTS
-            # ====================================
+            
 
             await monitor.check_pending_channels(
                 dialogs
             )
 
-            # ====================================
-            # CHECK NORMAL NEW CHANNELS
-            # ====================================
+            
 
             await monitor.check_for_new_channels(
                 dialogs
             )
 
-            # Wait before checking again.
             await asyncio.sleep(5)
 
     except KeyboardInterrupt:
@@ -171,9 +132,6 @@ async def main():
         )
 
 
-# ============================================
-# RUN PROGRAM
-# ============================================
 
 asyncio.run(main())
 
