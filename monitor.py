@@ -5,28 +5,40 @@ from telethon.tl.functions.channels import LeaveChannelRequest
 from telethon.tl.functions.messages import CheckChatInviteRequest
 
 from models import ChannelMembership
+from llm import GeminiLLM
 
 
 class TelegramMonitor:
 
-    def __init__(self, client, database, notifier):
+    def __init__(
+        self,
+        client,
+        database,
+        notifier,
+        bot,
+    ):
 
         self.client = client
         self.database = database
         self.notifier = notifier
+        self.bot = bot
 
         
+        self.agent = GeminiLLM(
+            telegram_client=client,
+            database=database,
+        )
+
         self.pending_notifications = {}
 
         self.my_user_id = None
 
-        
         self.baseline_channel_ids = set()
 
-        
         self.printed_pending_invites = set()
 
-    
+        
+        self.recently_processed_channel_ids = set()
 
     async def initialize(self):
 
@@ -38,11 +50,11 @@ class TelegramMonitor:
             f"Telegram user ID: {self.my_user_id}"
         )
 
-    
-
     async def initialize_baseline(self):
 
-        print("\nCreating initial channel baseline...")
+        print(
+            "\nCreating initial channel baseline..."
+        )
 
         dialogs = await self.client.get_dialogs()
 
@@ -56,7 +68,6 @@ class TelegramMonitor:
             channel_id = channel.id
             title = dialog.title
 
-            
             self.baseline_channel_ids.add(
                 channel_id
             )
@@ -64,11 +75,13 @@ class TelegramMonitor:
             username = getattr(
                 channel,
                 "username",
-                None
+                None,
             )
 
-            existing_channel = self.database.get_channel(
-                channel_id
+            existing_channel = (
+                self.database.get_channel(
+                    channel_id
+                )
             )
 
             if existing_channel is not None:
@@ -93,9 +106,9 @@ class TelegramMonitor:
                 f"Baseline: {title}"
             )
 
-        print("Initial baseline created.")
-
-        
+        print(
+            "Initial baseline created."
+        )
 
         pending_invites = (
             self.database.get_pending_invites()
@@ -123,10 +136,9 @@ class TelegramMonitor:
 
     async def check_for_new_channels(
         self,
-        dialogs=None
+        dialogs=None,
     ):
 
-        
         if dialogs is None:
 
             dialogs = await self.client.get_dialogs()
@@ -153,39 +165,55 @@ class TelegramMonitor:
             username = getattr(
                 channel,
                 "username",
-                None
+                None,
             )
 
             
+
+            if (
+                channel_id
+                in self.recently_processed_channel_ids
+            ):
+                continue
+
+            
+
             if channel_id in self.baseline_channel_ids:
                 continue
 
             
+
             if title in pending_titles:
                 continue
 
-            existing_channel = self.database.get_channel(
-                channel_id
+            
+
+            existing_channel = (
+                self.database.get_channel(
+                    channel_id
+                )
             )
 
             if existing_channel is not None:
                 continue
 
             
+            if not username:
+                continue
 
             now = datetime.now()
 
-            membership = ChannelMembership(
+            joined_at = now.isoformat()
+
+            
+
+            self.database.add_public_channel(
                 channel_id=channel_id,
                 title=title,
                 username=username,
-                status="active",
-                created_at=now,
-                updated_at=now,
-            )
-
-            self.database.add_channel(
-                membership
+                joined_at=joined_at,
+                created_at=joined_at,
+                updated_at=joined_at,
             )
 
             print(
@@ -193,7 +221,7 @@ class TelegramMonitor:
             )
 
             print(
-                f"🚨 NEW CHANNEL DETECTED: {title}"
+                f"🟢 NEW PUBLIC CHANNEL JOINED: {title}"
             )
 
             print(
@@ -201,36 +229,142 @@ class TelegramMonitor:
             )
 
             print(
-                f"Username: @{username or 'None'}"
+                f"Username: @{username}"
+            )
+
+            print(
+                f"Joined at: {joined_at}"
             )
 
             print(
                 "========================================"
             )
 
-            notification = (
-                await self.notifier.notify_new_channel(
-                    membership
+            
+            try:
+
+                await self.bot.notify_public_channel(
+                    channel_id=channel_id,
+                    title=title,
+                    username=username,
+                    joined_at=joined_at,
                 )
-            )
 
-            self.pending_notifications[
-                notification.id
-            ] = channel_id
+                print(
+                    f"Immediate notification sent: {title}"
+                )
 
-            print(
-                f"Notification sent for: {title}"
-            )
+            except Exception as error:
+
+                print(
+                    f"❌ Could not send public channel "
+                    f"notification: {error}"
+                )
+
+        
+
+        await self.check_public_channels_after_8_days(
+            dialogs=dialogs
+        )
+
+    
+
+    
+    async def check_public_channels_after_8_days(
+        self,
+        dialogs=None,
+    ):
+        if dialogs is None:
+            dialogs = await self.client.get_dialogs()
+
+        current_channel_ids = {
+            dialog.entity.id
+            for dialog in dialogs
+            if dialog.is_channel
+        }
+
+        try:
+            with self.database.connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT
+                        channel_id,
+                        title,
+                        username,
+                        joined_at,
+                        reminder_sent
+                    FROM channel_memberships
+                    WHERE status = 'active'
+                      AND username IS NOT NULL
+                      AND joined_at IS NOT NULL
+                    """
+                ).fetchall()
+
+        except Exception as error:
+            print(f"Could not check 8-day reminders: {error}")
+            return
+
+        now = datetime.now()
+
+        for row in rows:
+            channel_id, title, username, joined_at_value, reminder_sent = row
+
+            if reminder_sent:
+                continue
+
+            if channel_id not in current_channel_ids:
+                continue
+
+            try:
+                joined_at = datetime.fromisoformat(joined_at_value)
+            except (ValueError, TypeError):
+                print(f"Invalid joined_at for {title}: {joined_at_value}")
+                continue
+
+            
+            if joined_at.tzinfo is not None:
+                from datetime import timezone
+                current_time = datetime.now(timezone.utc)
+                joined_at = joined_at.astimezone(timezone.utc)
+            else:
+                current_time = now
+
+            days_joined = (
+                current_time - joined_at
+            ).total_seconds() / 86400
+
+            if days_joined < 8:
+                continue
+
+
+            if getattr(self.bot, "owner_id", None) is None:
+                continue
+
+            try:
+                await self.bot.notify_8_day_reminder(
+                    channel_id=channel_id,
+                    title=title,
+                    username=username,
+                    joined_at=joined_at_value,
+                )
+
+                self.database.mark_reminder_sent(channel_id)
+                print(f"8-day reminder sent: {title}")
+
+            except Exception as error:
+                print(f"Could not send reminder for {title}: {error}")
+
+    
 
     async def handle_pending_join_request(
         self,
-        update
+        update,
     ):
 
         message = getattr(
             update,
             "message",
-            None
+            None,
         )
 
         if message is None:
@@ -239,32 +373,37 @@ class TelegramMonitor:
         reply_markup = getattr(
             message,
             "reply_markup",
-            None
+            None,
         )
 
         if reply_markup is None:
             return
 
-        for row in reply_markup.rows:
+        
+        rows = getattr(reply_markup, "rows", None)
+        if not rows:
+            return
+
+        for row in rows:
 
             for button in row.buttons:
 
                 button_text = getattr(
                     button,
                     "text",
-                    ""
+                    "",
                 ) or ""
 
                 button_type = getattr(
                     button,
                     "type",
-                    None
+                    None,
                 )
 
                 button_url = getattr(
                     button_type,
                     "url",
-                    None
+                    None,
                 )
 
                 if not button_url:
@@ -272,7 +411,7 @@ class TelegramMonitor:
 
                 match = re.search(
                     r"(?:https?://)?t\.me/\+([A-Za-z0-9_-]+)",
-                    button_url
+                    button_url,
                 )
 
                 if not match:
@@ -280,14 +419,12 @@ class TelegramMonitor:
 
                 invite_hash = match.group(1)
 
-
                 existing_pending = (
                     self.database.get_pending_invite(
                         invite_hash
                     )
                 )
 
-                
                 if existing_pending is not None:
                     return
 
@@ -309,7 +446,6 @@ class TelegramMonitor:
 
                 try:
 
-                    
                     invite = await self.client(
                         CheckChatInviteRequest(
                             invite_hash
@@ -319,17 +455,18 @@ class TelegramMonitor:
                     invite_title = getattr(
                         invite,
                         "title",
-                        "Unknown"
+                        "Unknown",
                     )
 
                     request_needed = getattr(
                         invite,
                         "request_needed",
-                        False
+                        False,
                     )
 
                     print(
-                        f"Invite title: {invite_title}"
+                        f"Invite title: "
+                        f"{invite_title}"
                     )
 
                     print(
@@ -344,18 +481,49 @@ class TelegramMonitor:
                             "admin approval."
                         )
 
-                        now = datetime.now().isoformat()
+                        print()
+                        print(
+                            "🤖 Sending event to "
+                            "Gemini Agent..."
+                        )
 
-                        self.database.add_pending_invite(
-                            invite_hash=invite_hash,
-                            title=invite_title,
-                            created_at=now,
-                            updated_at=now,
+                        agent_result = (
+                            await self.agent.ask_with_tool(
+                                f"""
+You are the Telegram Cleaner Agent.
+
+A private Telegram channel invite has been detected.
+
+Channel title:
+{invite_title}
+
+Invite hash:
+{invite_hash}
+
+Telegram reports that this invite requires administrator approval.
+
+Your task is to decide the correct action.
+
+Because this is a private invite requiring approval,
+track it as a pending channel by calling the
+store_pending_invite function.
+
+Do not leave any channel at this stage.
+
+Do not invent any information.
+
+Use the function tool to store the pending invite.
+"""
+                            )
+                        )
+
+                        print()
+                        print(
+                            "🤖 Gemini Agent result:"
                         )
 
                         print(
-                            f"⏳ Pending join request: "
-                            f"{invite_title}"
+                            agent_result
                         )
 
                         self.printed_pending_invites.add(
@@ -386,7 +554,7 @@ class TelegramMonitor:
 
     async def check_pending_channels(
         self,
-        dialogs=None
+        dialogs=None,
     ):
 
         pending_invites = (
@@ -436,13 +604,11 @@ class TelegramMonitor:
                     break
 
             if approved_channel is None:
-
-                
                 continue
 
             await self.handle_approved_channel(
                 invite_hash,
-                approved_channel["entity"]
+                approved_channel["entity"],
             )
 
     
@@ -450,7 +616,7 @@ class TelegramMonitor:
     async def handle_approved_channel(
         self,
         invite_hash,
-        channel
+        channel,
     ):
 
         channel_id = channel.id
@@ -458,13 +624,13 @@ class TelegramMonitor:
         channel_title = getattr(
             channel,
             "title",
-            "Unknown"
+            "Unknown",
         )
 
         username = getattr(
             channel,
             "username",
-            None
+            None,
         )
 
         print(
@@ -481,63 +647,137 @@ class TelegramMonitor:
         )
 
         print(
-            f"🚪 Automatically leaving: "
-            f"{channel_title}"
+            "🤖 Sending approved channel "
+            "to Gemini Agent..."
         )
 
         try:
 
-            await self.client(
-                LeaveChannelRequest(
-                    channel
+            agent_result = (
+                await self.agent.ask_with_tool(
+                    f"""
+You are the Telegram Cleaner Agent.
+
+A previously tracked private Telegram channel
+has now been approved and the user has joined it.
+
+Channel title:
+{channel_title}
+
+Channel ID:
+{channel_id}
+
+Invite hash:
+{invite_hash}
+
+The channel was previously stored as a pending
+invite because administrator approval was required.
+
+Now that the join request has been approved,
+decide the correct cleanup action.
+
+This channel was intentionally tracked as a
+temporary channel.
+
+Call the leave_channel function to leave it.
+
+Do not invent any information.
+
+Use the provided channel ID, invite hash,
+and channel title exactly as given.
+"""
                 )
             )
 
-            now = datetime.now()
+            print()
+            print(
+                "🤖 Gemini Agent result:"
+            )
 
-            existing_channel = (
-                self.database.get_channel(
+            print(
+                agent_result
+            )
+
+            agent_left_channel = False
+
+            tool_results = agent_result.get(
+                "tool_results",
+                [],
+            )
+
+            for tool_result in tool_results:
+
+                if (
+                    tool_result.get("tool_name")
+                    == "leave_channel"
+                ):
+
+                    result = tool_result.get(
+                        "result",
+                        {},
+                    )
+
+                    if (
+                        isinstance(result, dict)
+                        and result.get("status")
+                        == "left"
+                    ):
+
+                        agent_left_channel = True
+
+                        break
+
+            if agent_left_channel:
+
+                now = datetime.now()
+
+                existing_channel = (
+                    self.database.get_channel(
+                        channel_id
+                    )
+                )
+
+                if existing_channel is None:
+
+                    membership = ChannelMembership(
+                        channel_id=channel_id,
+                        title=channel_title,
+                        username=username,
+                        status="left",
+                        created_at=now,
+                        updated_at=now,
+                    )
+
+                    self.database.add_channel(
+                        membership
+                    )
+
+                    print(
+                        "Database: channel recorded "
+                        "with status = left"
+                    )
+
+                else:
+
+                    self.database.update_status(
+                        channel_id=channel_id,
+                        status="left",
+                        updated_at=now.isoformat(),
+                    )
+
+                    print(
+                        "Database: channel status "
+                        "updated to left"
+                    )
+
+                self.recently_processed_channel_ids.add(
                     channel_id
                 )
-            )
 
-            if existing_channel is None:
-
-                membership = ChannelMembership(
-                    channel_id=channel_id,
-                    title=channel_title,
-                    username=username,
-                    status="left",
-                    created_at=now,
-                    updated_at=now,
+                print(
+                    f"✅ Agent cleanup completed: "
+                    f"{channel_title}"
                 )
-
-                self.database.add_channel(
-                    membership
-                )
-
-            else:
-
-                self.database.update_status(
-                    channel_id=channel_id,
-                    status="left",
-                    updated_at=now.isoformat(),
-                )
-
-            self.database.update_pending_invite_status(
-                invite_hash=invite_hash,
-                status="left",
-                updated_at=now.isoformat(),
-            )
-
-            print(
-                f"✅ {channel_title} "
-                f"left successfully."
-            )
-
-            print(
-                "Database status: left"
-            )
 
             print(
                 "========================================\n"
@@ -546,13 +786,16 @@ class TelegramMonitor:
         except Exception as error:
 
             print(
-                f"❌ Error while leaving "
-                f"{channel_title}: {error}"
+                f"❌ Error while processing approved "
+                f"channel {channel_title}: {error}"
             )
 
     
 
-    async def handle_reply(self, event):
+    async def handle_reply(
+        self,
+        event,
+    ):
 
         if not event.out:
             return
@@ -585,8 +828,6 @@ class TelegramMonitor:
             .lower()
         )
 
-        
-
         if answer == "yes":
 
             print(
@@ -596,18 +837,25 @@ class TelegramMonitor:
 
             try:
 
-                channel = await self.client.get_entity(
-                    channel_id
+                channel = (
+                    await self.client.get_entity(
+                        channel_id
+                    )
                 )
 
                 await self.client(
-                    LeaveChannelRequest(channel)
+                    LeaveChannelRequest(
+                        channel
+                    )
                 )
 
                 self.database.update_status(
                     channel_id=channel_id,
                     status="left",
-                    updated_at=datetime.now().isoformat(),
+                    updated_at=(
+                        datetime.now()
+                        .isoformat()
+                    ),
                 )
 
                 await event.reply(
@@ -629,8 +877,6 @@ class TelegramMonitor:
                     f"{error}"
                 )
 
-        
-
         elif answer == "no":
 
             print(
@@ -641,7 +887,10 @@ class TelegramMonitor:
             self.database.update_status(
                 channel_id=channel_id,
                 status="kept",
-                updated_at=datetime.now().isoformat(),
+                updated_at=(
+                    datetime.now()
+                    .isoformat()
+                ),
             )
 
             await event.reply(

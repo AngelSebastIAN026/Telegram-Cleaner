@@ -7,35 +7,47 @@ from database import Database
 from telegram_client import TelegramService
 from notifier import TelegramNotifier
 from monitor import TelegramMonitor
+from bot import TelegramBot
 
 
 async def main():
 
-
+    
     config = load_config()
 
-
-    telegram = TelegramService(config)
-
-    await telegram.connect()
-
+    
     database = Database()
-
     database.initialize()
 
+    
+    telegram = TelegramService(config)
+    await telegram.connect()
+
+    
 
     notifier = TelegramNotifier(
         telegram.client,
         database,
     )
 
+    
+
+    telegram_bot = TelegramBot(
+        config=config,
+        database=database,
+        user_client=telegram.client,
+    )
+
+    await telegram_bot.connect()
+
+    
 
     monitor = TelegramMonitor(
         telegram.client,
         database,
         notifier,
+        telegram_bot,
     )
-
 
     await monitor.initialize()
 
@@ -46,53 +58,31 @@ async def main():
     )
 
     
-
     telegram.client.add_event_handler(
         monitor.handle_pending_join_request,
         events.Raw,
     )
 
     
-
     await monitor.initialize_baseline()
 
     
 
-    print(
-        "\n========================================"
-    )
+    print()
+    print("==========================================")
+    print("Telegram Cleaner Agent is running")
+    print("==========================================")
+    print()
 
-    print(
-        "       TELEGRAM CHANNEL CLEANER"
-    )
+    print("Cleaner monitor: ACTIVE")
+    print("Dashboard bot: ACTIVE")
+    print()
 
-    print(
-        "========================================"
-    )
-
-    print(
-        "Monitoring for new channels..."
-    )
-
-    print(
-        "Monitoring join requests..."
-    )
-
-    print(
-        "Pending requests will be left automatically"
-    )
-
-    print(
-        "after approval."
-    )
-
-    print(
-        "Reply YES or NO to normal channel notifications."
-    )
-
-    print(
-        "Press Ctrl+C to stop."
-    )
+    print("Available bot options:")
+    print("  🟡 Pending Channels")
+    print("  🟢 Active Channels")
+    print("  ⚪ Left Channels")
+    print()
 
     
 
@@ -100,38 +90,31 @@ async def main():
 
         while True:
 
-            
             dialogs = await telegram.client.get_dialogs()
 
             
-
             await monitor.check_pending_channels(
                 dialogs
             )
 
             
-
             await monitor.check_for_new_channels(
                 dialogs
             )
 
+            # Check every 5 seconds
             await asyncio.sleep(5)
 
     except KeyboardInterrupt:
 
-        print(
-            "\nStopping Telegram Channel Cleaner..."
-        )
+        print()
+        print("Stopping application...")
 
     finally:
 
+        await telegram_bot.disconnect()
         await telegram.disconnect()
 
-        print(
-            "Disconnected from Telegram."
-        )
 
-
-
-asyncio.run(main())
-
+if __name__ == "__main__":
+    asyncio.run(main())
