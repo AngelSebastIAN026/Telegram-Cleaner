@@ -95,6 +95,6 @@ This project is intended for educational and research purposes. Users are respon
 
 ## 👩‍💻 Author
 
-**YOUR NAME**
+**ANGEL SEBASTIAN**
 
-GitHub: https://github.com/YOUR_USERNAME
+GitHub: https://github.com/AngelSebastIAN026
